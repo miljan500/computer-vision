@@ -2,46 +2,40 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 def add_halftone_effect(img, cell_size=4, dot_intensity=0.368):
     h, w, _ = img.shape
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
 
-    gh = max(1, h // cell_size)
-    gw = max(1, w // cell_size)
-    small = cv2.resize(gray, (gw, gh), interpolation=cv2.INTER_AREA)
-    cell_mean = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
-
-    darkness = 1.0 - (cell_mean / 255.0)
-    target_radius = (cell_size / 2.0) * darkness * 0.95
-
-    y_idx, x_idx = np.indices((h, w), dtype=np.float32)
-    cy = (np.floor(y_idx / cell_size) + 0.5) * cell_size
-    cx = (np.floor(x_idx / cell_size) + 0.5) * cell_size
-    dist = np.sqrt((x_idx - cx) ** 2 + (y_idx - cy) ** 2)
-
-    dot_mask = np.where((dist <= target_radius) & (target_radius >= 0.7), dot_intensity, 1.0).astype(np.float32)
-
-    result = img.astype(np.float32) * dot_mask[:, :, np.newaxis]
-    return np.clip(result, 0, 255).astype(np.uint8)
-
-
-def add_hatching_effect(img, spacing=10, angle=65, shadow_thresh=59, line_intensity=0.397):
-    h, w, _ = img.shape
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    y_idx, x_idx = np.indices((h, w), dtype=np.float32)
-    theta = np.deg2rad(angle)
-    rotated = x_idx * np.cos(theta) + y_idx * np.sin(theta)
-    line_pattern = (np.mod(rotated, spacing) < 1.5)
-
-    shadow_mask = gray < shadow_thresh
-    hatching_mask = line_pattern & shadow_mask
-
     result = img.copy()
-    result[hatching_mask] = (result[hatching_mask] * line_intensity).astype(np.uint8)
-    return result
 
+    for y in range(0, h, cell_size):
+        for x in range(0, w, cell_size):
+
+            cell = gray[y:y+cell_size, x:x+cell_size]
+
+            mean = np.mean(cell)
+            darkness = 1.0 - mean / 255.0
+
+            radius = (cell_size / 2.0) * darkness * 0.95
+
+            if radius >= 0.7:
+                cx = x + cell_size // 2
+                cy = y + cell_size // 2
+
+                for dy in range(-cell_size // 2, cell_size // 2 + 1):
+                    for dx in range(-cell_size // 2, cell_size // 2 + 1):
+
+                        px = cx + dx
+                        py = cy + dy
+
+                        if 0 <= px < w and 0 <= py < h:
+                            distance = np.sqrt(dx**2 + dy**2)
+
+                            if distance <= radius:
+                                result[py, px] = result[py, px] * dot_intensity
+
+    return result
 
 def comic_filter(img):
     imgGaussian = cv2.GaussianBlur(img, (3, 3), 0)
@@ -56,17 +50,20 @@ def comic_filter(img):
 
     # N1 contrast
     imgLAB = cv2.cvtColor(imgMedian, cv2.COLOR_BGR2LAB)
-    l_channel, a_channel, b_channel = cv2.split(imgLAB)
+    l_channel = imgLAB[:, :, 0]
     clahe = cv2.createCLAHE(clipLimit=1.21, tileGridSize=(6, 6))
     l_enhanced = clahe.apply(l_channel)
-    imgContrast = cv2.cvtColor(cv2.merge((l_enhanced, a_channel, b_channel)), cv2.COLOR_LAB2BGR)
+    imgLAB[:, :, 0] = l_enhanced
+    imgContrast = cv2.cvtColor(imgLAB, cv2.COLOR_LAB2BGR)
 
     imgQuantized = ((imgContrast.astype(np.int16) // 32) * 32 + 16).astype(np.uint8)
 
     # N2 saturation
     imgHSV = cv2.cvtColor(imgQuantized, cv2.COLOR_BGR2HSV).astype(np.float32)
-    imgHSV[:, :, 1] = np.clip(imgHSV[:, :, 1] * 0.844, 0, 255)
-    # imgHSV[:, :, 1] = np.clip(imgHSV[:, :, 1] * 0.78, 0, 255)
+    s_channel = imgHSV[:, :, 1]
+    s_channel = s_channel * 0.844
+    s_channel = np.clip(s_channel, 0, 255)
+    imgHSV[:, :, 1] = s_channel
     imgSaturated = cv2.cvtColor(imgHSV.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
     # N3 halftone
@@ -75,10 +72,7 @@ def comic_filter(img):
     imgOutlined = imgHalftone.copy()
     imgOutlined[imgEdgesThick > 0] = (0, 0, 0)
 
-    # N4 hatching
-    imgFinal = add_hatching_effect(imgOutlined, spacing=10, angle=65, shadow_thresh=59, line_intensity=0.397)
-
-    return imgFinal
+    return imgOutlined
 
 
 if __name__ == '__main__':
